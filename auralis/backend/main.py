@@ -6,7 +6,11 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from services.webrtc_service import close_peer_connections, create_answer
+from services.webrtc_service import (
+	close_peer_connections,
+	create_answer,
+	get_transcription,
+)
 
 
 @asynccontextmanager
@@ -54,3 +58,11 @@ async def submit_offer(offer: OfferRequest):
 			status_code=400,
 			detail="Could not complete the WebRTC offer.",
 		) from error
+
+
+@app.get("/transcripts/{session_id}")
+def read_transcript(session_id: str):
+	transcript = get_transcription(session_id)
+	if transcript is None:
+		raise HTTPException(status_code=404, detail="Transcript session not found.")
+	return {"transcript": transcript}

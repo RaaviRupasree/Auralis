@@ -41,15 +41,50 @@ function App() {
   const [microphoneActive, setMicrophoneActive] = useState(false)
   const [isStarting, setIsStarting] = useState(false)
   const [error, setError] = useState('')
+  const [sessionId, setSessionId] = useState(null)
+  const [transcript, setTranscript] = useState('Waiting for speech...')
 
   useEffect(() => {
     return () => releaseMedia(peerConnectionRef, mediaStreamRef)
   }, [])
 
+  useEffect(() => {
+    if (!sessionId) return undefined
+
+    let isActive = true
+    const updateTranscript = async () => {
+      try {
+        const response = await fetch(`${backendUrl}/transcripts/${sessionId}`)
+        if (response.status === 404) {
+          if (isActive) setSessionId(null)
+          return
+        }
+        if (!response.ok) return
+
+        const result = await response.json()
+        if (isActive && result.transcript) {
+          setTranscript(result.transcript)
+        }
+      } catch {
+        // Keep the current transcript if a polling request temporarily fails.
+      }
+    }
+
+    void updateTranscript()
+    const intervalId = window.setInterval(() => void updateTranscript(), 1000)
+
+    return () => {
+      isActive = false
+      window.clearInterval(intervalId)
+    }
+  }, [sessionId])
+
   const stopMicrophone = () => {
     releaseMedia(peerConnectionRef, mediaStreamRef)
     setMicrophoneActive(false)
     setConnectionState('disconnected')
+    setSessionId(null)
+    setTranscript('Waiting for speech...')
     setError('')
   }
 
@@ -108,7 +143,9 @@ function App() {
       }
 
       const answer = await response.json()
-      await peerConnection.setRemoteDescription(answer)
+        const { session_id: newSessionId, ...description } = answer
+        await peerConnection.setRemoteDescription(description)
+        setSessionId(newSessionId)
     } catch (startError) {
       if (!mediaStreamRef.current) {
         setPermissionState(
@@ -180,6 +217,11 @@ function App() {
             </strong>
           </div>
         </div>
+
+        <section className="transcript-panel" aria-live="polite">
+          <h2>Transcript</h2>
+          <p>{transcript}</p>
+        </section>
 
         {error && <p className="connection-error" role="alert">{error}</p>}
       </main>

@@ -330,6 +330,29 @@
   background: #b74736;
 }
 
+.transcript-panel {
+  margin-top: 24px;
+  padding-top: 18px;
+  border-top: 1px solid #e7ece8;
+}
+
+.transcript-panel h2 {
+  margin: 0 0 8px;
+  color: #63786d;
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.transcript-panel p {
+  min-height: 48px;
+  color: #263c33;
+  font-size: 15px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .connection-error {
   margin: 18px 0 0;
   color: #9b342b;

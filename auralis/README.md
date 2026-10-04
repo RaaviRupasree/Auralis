@@ -42,3 +42,13 @@ Flow:
 Browser Microphone → React → WebRTC → aiortc → FastAPI Backend
 
 STT and emotion detection will be added in later steps.
+
+## Speech-to-Text
+
+Auralis uses Faster-Whisper to convert incoming microphone audio into text.
+
+Flow:
+
+Browser Microphone → WebRTC → aiortc → Audio Buffer → Faster-Whisper → Transcript
+
+The default model is `tiny` with CPU `int8` settings. The model downloads to the local cache on first transcription; model files are not stored in this repository. Configure `WHISPER_MODEL`, `WHISPER_DEVICE`, and `WHISPER_COMPUTE_TYPE` with environment variables if needed.
