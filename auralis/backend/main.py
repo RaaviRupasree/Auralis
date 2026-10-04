@@ -62,7 +62,7 @@ async def submit_offer(offer: OfferRequest):
 
 @app.get("/transcripts/{session_id}")
 def read_transcript(session_id: str):
-	transcript = get_transcription(session_id)
-	if transcript is None:
+	transcription = get_transcription(session_id)
+	if transcription is None:
 		raise HTTPException(status_code=404, detail="Transcript session not found.")
-	return {"transcript": transcript}
+	return transcription

@@ -43,6 +43,7 @@ function App() {
   const [error, setError] = useState('')
   const [sessionId, setSessionId] = useState(null)
   const [transcript, setTranscript] = useState('Waiting for speech...')
+  const [sttStatus, setSttStatus] = useState('ready')
 
   useEffect(() => {
     return () => releaseMedia(peerConnectionRef, mediaStreamRef)
@@ -56,12 +57,23 @@ function App() {
       try {
         const response = await fetch(`${backendUrl}/transcripts/${sessionId}`)
         if (response.status === 404) {
-          if (isActive) setSessionId(null)
+          if (isActive) {
+            setSessionId(null)
+            setSttStatus('ready')
+          }
           return
         }
         if (!response.ok) return
 
         const result = await response.json()
+        if (isActive) {
+          setSttStatus(result.status === 'processing' ? 'processing' : result.status)
+          if (result.status === 'error') {
+            setError('Speech recognition failed. Check the backend terminal.')
+          } else if (result.status === 'ready') {
+            setError('')
+          }
+        }
         if (isActive && result.transcript) {
           setTranscript(result.transcript)
         }
@@ -85,6 +97,7 @@ function App() {
     setConnectionState('disconnected')
     setSessionId(null)
     setTranscript('Waiting for speech...')
+    setSttStatus('ready')
     setError('')
   }
 
@@ -92,6 +105,7 @@ function App() {
     if (!navigator.mediaDevices?.getUserMedia) {
       setPermissionState('unavailable')
       setConnectionState('failed')
+      setSttStatus('error')
       setError('Microphone access is unavailable in this browser context.')
       return
     }
@@ -99,6 +113,8 @@ function App() {
     setIsStarting(true)
     setPermissionState('requesting')
     setConnectionState('connecting')
+    setSttStatus('ready')
+    setTranscript('Waiting for speech...')
     setError('')
 
     try {
@@ -118,6 +134,10 @@ function App() {
       peerConnection.onconnectionstatechange = () => {
         setConnectionState(peerConnection.connectionState)
         if (peerConnection.connectionState === 'failed') {
+          peerConnection.onconnectionstatechange = null
+          releaseMedia(peerConnectionRef, mediaStreamRef)
+          setMicrophoneActive(false)
+          setSessionId(null)
           setError('WebRTC connection failed. Check that the backend is running.')
         }
       }
@@ -143,9 +163,9 @@ function App() {
       }
 
       const answer = await response.json()
-        const { session_id: newSessionId, ...description } = answer
-        await peerConnection.setRemoteDescription(description)
-        setSessionId(newSessionId)
+      const { session_id: newSessionId, ...description } = answer
+      await peerConnection.setRemoteDescription(description)
+      setSessionId(newSessionId)
     } catch (startError) {
       if (!mediaStreamRef.current) {
         setPermissionState(
@@ -155,7 +175,15 @@ function App() {
       releaseMedia(peerConnectionRef, mediaStreamRef)
       setMicrophoneActive(false)
       setConnectionState('failed')
-      setError(startError.message || 'Could not start the microphone connection.')
+      setSessionId(null)
+      setSttStatus('error')
+      if (startError.name === 'NotAllowedError') {
+        setError('Microphone permission was denied. Allow access and try again.')
+      } else if (startError instanceof TypeError) {
+        setError('Could not reach the backend. Make sure FastAPI is running on port 8000.')
+      } else {
+        setError(startError.message || 'Could not start the microphone connection.')
+      }
     } finally {
       setIsStarting(false)
     }
@@ -176,6 +204,12 @@ function App() {
     failed: 'Failed',
     closed: 'Disconnected',
   }[connectionState] || connectionState
+
+  const sttStatusLabel = {
+    ready: 'Ready',
+    processing: 'Processing',
+    error: 'Error',
+  }[sttStatus] || 'Ready'
 
   return (
     <div className="auralis-shell">
@@ -206,15 +240,23 @@ function App() {
 
         <div className="connection-details" aria-live="polite">
           <div className="status-row">
-            <span>Microphone permission</span>
-            <strong>{permissionLabel}</strong>
+            <span>Microphone</span>
+            <strong>{microphoneActive ? 'Active' : 'Inactive'}</strong>
           </div>
           <div className="status-row">
-            <span>Connection Status</span>
+            <span>WebRTC</span>
             <strong className={`connection-value is-${connectionState}`}>
               <span className="status-dot" aria-hidden="true" />
               {connectionLabel}
             </strong>
+          </div>
+          <div className="status-row">
+            <span>Microphone permission</span>
+            <strong>{permissionLabel}</strong>
+          </div>
+          <div className="status-row">
+            <span>STT Status</span>
+            <strong className={`stt-status is-${sttStatus}`}>{sttStatusLabel}</strong>
           </div>
         </div>
 

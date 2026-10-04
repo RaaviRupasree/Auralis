@@ -330,6 +330,18 @@
   background: #b74736;
 }
 
+.stt-status.is-processing {
+  color: #ad6b1e;
+}
+
+.stt-status.is-ready {
+  color: #27835e;
+}
+
+.stt-status.is-error {
+  color: #b74736;
+}
+
 .transcript-panel {
   margin-top: 24px;
   padding-top: 18px;

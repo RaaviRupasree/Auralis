@@ -52,3 +52,23 @@ Flow:
 Browser Microphone → WebRTC → aiortc → Audio Buffer → Faster-Whisper → Transcript
 
 The default model is `tiny` with CPU `int8` settings. The model downloads to the local cache on first transcription; model files are not stored in this repository. Configure `WHISPER_MODEL`, `WHISPER_DEVICE`, and `WHISPER_COMPUTE_TYPE` with environment variables if needed.
+
+## Week 1 Status
+
+The Week 1 real-time audio foundation is complete.
+
+Current pipeline:
+
+Browser Microphone → React → WebRTC → aiortc → Audio Buffer → Faster-Whisper → Transcript
+
+### Completed
+
+- Project setup
+- FastAPI backend
+- WebRTC audio foundation
+- Faster-Whisper STT
+- Basic latency measurement
+
+### Next
+
+Week 2 will add Voice Activity Detection, emotion detection, and LLM integration.
