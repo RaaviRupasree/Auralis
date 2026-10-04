@@ -1,121 +1,189 @@
-import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
+import { useEffect, useRef, useState } from 'react'
 import './App.css'
 
+const backendUrl = 'http://127.0.0.1:8000'
+
+function waitForIceGathering(peerConnection) {
+  if (peerConnection.iceGatheringState === 'complete') {
+    return Promise.resolve()
+  }
+
+  return new Promise((resolve) => {
+    const onGatheringStateChange = () => {
+      if (peerConnection.iceGatheringState === 'complete') {
+        peerConnection.removeEventListener(
+          'icegatheringstatechange',
+          onGatheringStateChange,
+        )
+        resolve()
+      }
+    }
+
+    peerConnection.addEventListener(
+      'icegatheringstatechange',
+      onGatheringStateChange,
+    )
+  })
+}
+
+function releaseMedia(peerConnectionRef, mediaStreamRef) {
+  peerConnectionRef.current?.close()
+  peerConnectionRef.current = null
+  mediaStreamRef.current?.getTracks().forEach((track) => track.stop())
+  mediaStreamRef.current = null
+}
+
 function App() {
-  const [count, setCount] = useState(0)
+  const peerConnectionRef = useRef(null)
+  const mediaStreamRef = useRef(null)
+  const [permissionState, setPermissionState] = useState('not requested')
+  const [connectionState, setConnectionState] = useState('disconnected')
+  const [microphoneActive, setMicrophoneActive] = useState(false)
+  const [isStarting, setIsStarting] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    return () => releaseMedia(peerConnectionRef, mediaStreamRef)
+  }, [])
+
+  const stopMicrophone = () => {
+    releaseMedia(peerConnectionRef, mediaStreamRef)
+    setMicrophoneActive(false)
+    setConnectionState('disconnected')
+    setError('')
+  }
+
+  const startMicrophone = async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setPermissionState('unavailable')
+      setConnectionState('failed')
+      setError('Microphone access is unavailable in this browser context.')
+      return
+    }
+
+    setIsStarting(true)
+    setPermissionState('requesting')
+    setConnectionState('connecting')
+    setError('')
+
+    try {
+      const mediaStream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+      })
+      mediaStreamRef.current = mediaStream
+      setPermissionState('granted')
+      setMicrophoneActive(true)
+
+      const peerConnection = new RTCPeerConnection()
+      peerConnectionRef.current = peerConnection
+      mediaStream.getAudioTracks().forEach((track) => {
+        peerConnection.addTrack(track, mediaStream)
+      })
+
+      peerConnection.onconnectionstatechange = () => {
+        setConnectionState(peerConnection.connectionState)
+        if (peerConnection.connectionState === 'failed') {
+          setError('WebRTC connection failed. Check that the backend is running.')
+        }
+      }
+
+      const offer = await peerConnection.createOffer()
+      await peerConnection.setLocalDescription(offer)
+      await waitForIceGathering(peerConnection)
+
+      const response = await fetch(`${backendUrl}/offer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sdp: peerConnection.localDescription.sdp,
+          type: peerConnection.localDescription.type,
+        }),
+      })
+
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}))
+        throw new Error(
+          result.detail || `WebRTC signaling failed (${response.status}).`,
+        )
+      }
+
+      const answer = await response.json()
+      await peerConnection.setRemoteDescription(answer)
+    } catch (startError) {
+      if (!mediaStreamRef.current) {
+        setPermissionState(
+          startError.name === 'NotAllowedError' ? 'denied' : 'unavailable',
+        )
+      }
+      releaseMedia(peerConnectionRef, mediaStreamRef)
+      setMicrophoneActive(false)
+      setConnectionState('failed')
+      setError(startError.message || 'Could not start the microphone connection.')
+    } finally {
+      setIsStarting(false)
+    }
+  }
+
+  const permissionLabel = {
+    'not requested': 'Not requested',
+    requesting: 'Requesting permission',
+    granted: 'Granted',
+    denied: 'Denied',
+    unavailable: 'Unavailable',
+  }[permissionState]
+
+  const connectionLabel = {
+    disconnected: 'Disconnected',
+    connecting: 'Connecting',
+    connected: 'Connected',
+    failed: 'Failed',
+    closed: 'Disconnected',
+  }[connectionState] || connectionState
 
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
+    <div className="auralis-shell">
+      <main className="audio-panel">
+        <div className="panel-kicker">
+          <span className="panel-mark" aria-hidden="true" />
+          LOCAL AUDIO LINK
         </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.jsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
+        <h1 className="auralis-title">Auralis</h1>
+        <p className="panel-description">Microphone connection</p>
+
         <button
+          className={`microphone-button${microphoneActive ? ' is-active' : ''}`}
           type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
+          onClick={microphoneActive ? stopMicrophone : startMicrophone}
+          disabled={isStarting}
+          aria-pressed={microphoneActive}
         >
-          Count is {count}
+          <span className="button-indicator" aria-hidden="true" />
+          {isStarting
+            ? permissionState === 'requesting'
+              ? 'Requesting Microphone...'
+              : 'Connecting...'
+            : microphoneActive
+              ? 'Microphone Active'
+              : 'Start Microphone'}
         </button>
-      </section>
 
-      <div className="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
+        <div className="connection-details" aria-live="polite">
+          <div className="status-row">
+            <span>Microphone permission</span>
+            <strong>{permissionLabel}</strong>
+          </div>
+          <div className="status-row">
+            <span>Connection Status</span>
+            <strong className={`connection-value is-${connectionState}`}>
+              <span className="status-dot" aria-hidden="true" />
+              {connectionLabel}
+            </strong>
+          </div>
         </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
 
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
+        {error && <p className="connection-error" role="alert">{error}</p>}
+      </main>
+    </div>
   )
 }
 

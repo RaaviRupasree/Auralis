@@ -32,3 +32,13 @@ uvicorn main:app --reload
 
 - Health check: http://127.0.0.1:8000/health
 - API documentation: http://127.0.0.1:8000/docs
+
+## WebRTC Audio Foundation
+
+Auralis now has a basic WebRTC connection between the React frontend and Python backend.
+
+Flow:
+
+Browser Microphone → React → WebRTC → aiortc → FastAPI Backend
+
+STT and emotion detection will be added in later steps.

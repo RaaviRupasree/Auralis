@@ -182,3 +182,171 @@
     border-right-color: var(--border);
   }
 }
+
+.auralis-shell {
+  min-height: 100svh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.audio-panel {
+  box-sizing: border-box;
+  width: min(100%, 460px);
+  padding: 36px;
+  border: 1px solid #dce6df;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 18px 48px rgba(33, 58, 48, 0.08);
+}
+
+.panel-kicker {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: #63786d;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.panel-mark {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #d9704c;
+}
+
+.auralis-title {
+  margin: 24px 0 2px;
+  color: #1f352d;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 42px;
+  font-weight: 500;
+  line-height: 1.1;
+  letter-spacing: 0;
+}
+
+.panel-description {
+  margin: 0;
+  color: #667970;
+  font-size: 15px;
+}
+
+.microphone-button {
+  width: 100%;
+  min-height: 54px;
+  margin-top: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 11px;
+  border: 1px solid #1c5142;
+  border-radius: 6px;
+  background: #1c5142;
+  color: #fff;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background-color 160ms ease, border-color 160ms ease;
+}
+
+.microphone-button:hover:not(:disabled) {
+  border-color: #143e32;
+  background: #143e32;
+}
+
+.microphone-button:focus-visible {
+  outline: 3px solid #d9704c;
+  outline-offset: 3px;
+}
+
+.microphone-button:disabled {
+  cursor: wait;
+  opacity: 0.76;
+}
+
+.microphone-button.is-active {
+  border-color: #a54835;
+  background: #a54835;
+}
+
+.microphone-button.is-active:hover:not(:disabled) {
+  border-color: #873b2c;
+  background: #873b2c;
+}
+
+.button-indicator,
+.status-dot {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.connection-details {
+  margin-top: 28px;
+  border-top: 1px solid #e7ece8;
+}
+
+.status-row {
+  min-height: 50px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid #e7ece8;
+  color: #586c62;
+  font-size: 14px;
+}
+
+.status-row strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #263c33;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: right;
+}
+
+.connection-value .status-dot {
+  width: 8px;
+  height: 8px;
+  background: #8b9991;
+}
+
+.connection-value.is-connecting .status-dot {
+  background: #d28a36;
+}
+
+.connection-value.is-connected .status-dot {
+  background: #27835e;
+}
+
+.connection-value.is-failed .status-dot {
+  background: #b74736;
+}
+
+.connection-error {
+  margin: 18px 0 0;
+  color: #9b342b;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 480px) {
+  .auralis-shell {
+    padding: 16px;
+  }
+
+  .audio-panel {
+    padding: 26px 22px;
+  }
+
+  .auralis-title {
+    font-size: 36px;
+  }
+}

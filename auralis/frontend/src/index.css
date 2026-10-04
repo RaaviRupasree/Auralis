@@ -109,3 +109,37 @@ code {
   padding: 4px 8px;
   background: var(--code-bg);
 }
+
+:root {
+  --text: #53675d;
+  --text-h: #1f352d;
+  --bg: #f2f6f2;
+  --border: #dce6df;
+  --code-bg: #e8eee9;
+  --sans: 'Trebuchet MS', 'Segoe UI', sans-serif;
+  --heading: Georgia, 'Times New Roman', serif;
+  --mono: Consolas, monospace;
+  font: 16px/1.5 var(--sans);
+  letter-spacing: 0;
+  color-scheme: light;
+  color: var(--text);
+  background: var(--bg);
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  background-color: #f2f6f2;
+  background-image: radial-gradient(#dbe5dd 0.8px, transparent 0.8px);
+  background-size: 22px 22px;
+}
+
+#root {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  text-align: left;
+  border: 0;
+  min-height: 100svh;
+  display: block;
+}
