@@ -1,12 +1,18 @@
 import asyncio
 import logging
 import uuid
+from collections import deque
 
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc.mediastreams import MediaStreamError
 from av import AudioResampler
 import numpy as np
 
+from services.vad_service import (
+    SAMPLE_RATE,
+    SPEECH_PADDING_SAMPLE_COUNT,
+    StreamingSileroVAD,
+)
 from services.whisper_service import transcribe_samples
 from utils.latency import elapsed_seconds, start_timer
 
@@ -16,13 +22,11 @@ peer_connections = set()
 audio_tasks = set()
 transcriptions = {}
 transcription_statuses = {}
+capture_statuses = {}
 pending_transcriptions = {}
 transcription_lock = asyncio.Lock()
-SAMPLE_RATE = 16000
-BUFFER_DURATION_SECONDS = 3
-BUFFER_SAMPLE_COUNT = SAMPLE_RATE * BUFFER_DURATION_SECONDS
-MINIMUM_TAIL_SAMPLE_COUNT = SAMPLE_RATE // 2
 SILENCE_RMS_THRESHOLD = 0.003
+PRE_ROLL_FRAME_COUNT = 6
 
 
 def _has_audio_energy(audio_samples):
@@ -56,7 +60,9 @@ async def _transcribe_buffer(session_id, audio_samples, audio_started_at):
         else:
             pending_transcriptions.pop(session_id, None)
             if transcription_statuses.get(session_id) != "error":
-                transcription_statuses[session_id] = "ready"
+                transcription_statuses[session_id] = capture_statuses.get(
+                    session_id, "listening"
+                )
 
 
 def _queue_transcription(session_id, audio_samples, audio_started_at):
@@ -76,8 +82,9 @@ def _queue_transcription(session_id, audio_samples, audio_started_at):
 
 async def _receive_audio(track, session_id):
     resampler = AudioResampler(format="s16", layout="mono", rate=SAMPLE_RATE)
+    vad = StreamingSileroVAD()
+    pre_roll = deque(maxlen=PRE_ROLL_FRAME_COUNT)
     audio_buffer = []
-    buffered_sample_count = 0
     audio_started_at = None
 
     try:
@@ -93,29 +100,59 @@ async def _receive_audio(track, session_id):
                 if samples.size == 0:
                     continue
 
-                if buffered_sample_count == 0:
-                    audio_started_at = start_timer()
-                audio_buffer.append(samples)
-                buffered_sample_count += samples.size
+                for vad_frame in vad.process(samples):
+                    if vad_frame.speech_started:
+                        audio_buffer = list(pre_roll)
+                        audio_started_at = start_timer()
+                        capture_statuses[session_id] = "speech_detected"
+                        if pending_transcriptions.get(session_id, 0) == 0:
+                            transcription_statuses[session_id] = "speech_detected"
 
-                if buffered_sample_count >= BUFFER_SAMPLE_COUNT:
-                    _queue_transcription(
-                        session_id,
-                        np.concatenate(audio_buffer),
-                        audio_started_at,
-                    )
-                    audio_buffer = []
-                    buffered_sample_count = 0
-                    audio_started_at = None
+                    if vad_frame.speech_active or audio_buffer:
+                        audio_buffer.append(vad_frame.samples)
+
+                    if (
+                        not vad_frame.speech_active
+                        and not vad_frame.speech_started
+                        and not audio_buffer
+                    ):
+                        pre_roll.append(vad_frame.samples)
+
+                    if vad_frame.speech_ended:
+                        segment = np.concatenate(audio_buffer)
+                        trailing_silence = max(
+                            0,
+                            vad_frame.silence_sample_count
+                            - SPEECH_PADDING_SAMPLE_COUNT,
+                        )
+                        if trailing_silence:
+                            segment = segment[:-trailing_silence]
+                        _queue_transcription(
+                            session_id,
+                            segment,
+                            audio_started_at or start_timer(),
+                        )
+                        logger.info("Silero VAD detected end of speech")
+                        audio_buffer = []
+                        audio_started_at = None
+                        capture_statuses[session_id] = "listening"
+                        if pending_transcriptions.get(session_id, 0) == 0:
+                            transcription_statuses[session_id] = "listening"
     except MediaStreamError:
         logger.info("Audio track ended")
     except Exception:
         logger.exception("Could not process incoming audio")
     finally:
-        if buffered_sample_count >= MINIMUM_TAIL_SAMPLE_COUNT:
+        if audio_buffer:
+            segment = np.concatenate(audio_buffer)
+            trailing_silence = max(
+                0, vad.silence_sample_count - SPEECH_PADDING_SAMPLE_COUNT
+            )
+            if trailing_silence:
+                segment = segment[:-trailing_silence]
             _queue_transcription(
                 session_id,
-                np.concatenate(audio_buffer),
+                segment,
                 audio_started_at or start_timer(),
             )
 
@@ -125,7 +162,8 @@ async def create_answer(sdp, offer_type):
     session_id = str(uuid.uuid4())
     peer_connections.add(peer_connection)
     transcriptions[session_id] = ""
-    transcription_statuses[session_id] = "ready"
+    capture_statuses[session_id] = "listening"
+    transcription_statuses[session_id] = "listening"
 
     @peer_connection.on("track")
     def on_track(track):
@@ -155,6 +193,7 @@ async def create_answer(sdp, offer_type):
         peer_connections.discard(peer_connection)
         transcriptions.pop(session_id, None)
         transcription_statuses.pop(session_id, None)
+        capture_statuses.pop(session_id, None)
         pending_transcriptions.pop(session_id, None)
         await peer_connection.close()
         raise
@@ -171,7 +210,7 @@ def get_transcription(session_id):
         return None
     return {
         "transcript": transcriptions[session_id],
-        "status": transcription_statuses.get(session_id, "ready"),
+        "status": transcription_statuses.get(session_id, "listening"),
     }
 
 
@@ -185,3 +224,8 @@ async def close_peer_connections():
 
     if audio_tasks:
         await asyncio.gather(*list(audio_tasks), return_exceptions=True)
+
+    transcriptions.clear()
+    transcription_statuses.clear()
+    capture_statuses.clear()
+    pending_transcriptions.clear()

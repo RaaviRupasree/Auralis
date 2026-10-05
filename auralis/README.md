@@ -9,6 +9,14 @@ Auralis is a Real-Time Voice-to-Voice Emotion Engine.
 - WebRTC audio communication
 - Faster-Whisper speech-to-text
 
+## Week 2 - Step 1: Silero VAD
+
+Silero VAD from Faster-Whisper detects speech in the 16 kHz WebRTC audio stream.
+The backend retains a short pre-roll, waits for 800 ms of silence to end a
+speech segment, and sends only completed speech segments to Faster-Whisper.
+The existing transcript endpoint reports whether the backend is listening,
+has detected speech, or is processing a transcript.
+
 ## Technology Stack
 
 - React
@@ -41,25 +49,23 @@ Flow:
 
 Browser Microphone → React → WebRTC → aiortc → FastAPI Backend
 
-STT and emotion detection will be added in later steps.
+Silero VAD now detects speech on the incoming stream, and completed speech
+segments are passed to Faster-Whisper. Emotion detection remains for a later
+step.
 
 ## Speech-to-Text
 
 Auralis uses Faster-Whisper to convert incoming microphone audio into text.
 
-Flow:
+The Week 1 audio flow was:
 
 Browser Microphone → WebRTC → aiortc → Audio Buffer → Faster-Whisper → Transcript
 
 The default model is `tiny` with CPU `int8` settings. The model downloads to the local cache on first transcription; model files are not stored in this repository. Configure `WHISPER_MODEL`, `WHISPER_DEVICE`, and `WHISPER_COMPUTE_TYPE` with environment variables if needed.
 
-## Week 1 Status
+## Current Audio Pipeline
 
-The Week 1 real-time audio foundation is complete.
-
-Current pipeline:
-
-Browser Microphone → React → WebRTC → aiortc → Audio Buffer → Faster-Whisper → Transcript
+Browser Microphone → React → WebRTC → aiortc → Silero VAD → Completed Speech Segment → Faster-Whisper → Transcript
 
 ### Completed
 
@@ -68,7 +74,8 @@ Browser Microphone → React → WebRTC → aiortc → Audio Buffer → Faster-W
 - WebRTC audio foundation
 - Faster-Whisper STT
 - Basic latency measurement
+- Silero voice activity detection and speech-end segmentation
 
 ### Next
 
-Week 2 will add Voice Activity Detection, emotion detection, and LLM integration.
+Continue with the next planned step only when ready.

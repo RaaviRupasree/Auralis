@@ -207,6 +207,8 @@ function App() {
 
   const sttStatusLabel = {
     ready: 'Ready',
+    listening: 'Listening',
+    speech_detected: 'Speech detected',
     processing: 'Processing',
     error: 'Error',
   }[sttStatus] || 'Ready'

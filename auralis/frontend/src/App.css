@@ -334,6 +334,14 @@
   color: #ad6b1e;
 }
 
+.stt-status.is-listening {
+  color: #63786d;
+}
+
+.stt-status.is-speech_detected {
+  color: #1c6a88;
+}
+
 .stt-status.is-ready {
   color: #27835e;
 }
