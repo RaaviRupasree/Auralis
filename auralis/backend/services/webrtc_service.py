@@ -8,6 +8,7 @@ from aiortc.mediastreams import MediaStreamError
 from av import AudioResampler
 import numpy as np
 
+from services.emotion_service import classify_emotion
 from services.vad_service import (
     SAMPLE_RATE,
     SPEECH_PADDING_SAMPLE_COUNT,
@@ -22,6 +23,7 @@ peer_connections = set()
 audio_tasks = set()
 transcriptions = {}
 transcription_statuses = {}
+segment_results = {}
 capture_statuses = {}
 pending_transcriptions = {}
 transcription_lock = asyncio.Lock()
@@ -37,26 +39,70 @@ def _has_audio_energy(audio_samples):
     return rms >= SILENCE_RMS_THRESHOLD
 
 
-async def _transcribe_buffer(session_id, audio_samples, audio_started_at):
+async def _analyze_segment(
+    session_id,
+    result_index,
+    audio_samples,
+    audio_started_at,
+):
+    async def transcribe():
+        try:
+            async with transcription_lock:
+                return await asyncio.to_thread(transcribe_samples, audio_samples)
+        except Exception:
+            logger.exception("Faster-Whisper transcription failed")
+            return None
+
+    async def detect_emotion():
+        try:
+            return await asyncio.to_thread(classify_emotion, audio_samples)
+        except Exception:
+            logger.exception("Wav2Vec2 emotion detection failed")
+            return None
+
     try:
-        async with transcription_lock:
-            text = await asyncio.to_thread(transcribe_samples, audio_samples)
-        if text:
-            current_text = transcriptions.get(session_id, "")
-            transcriptions[session_id] = " ".join(
-                part for part in (current_text, text) if part
+        text, emotion = await asyncio.gather(transcribe(), detect_emotion())
+        result = segment_results[session_id][result_index]
+        if text is None:
+            result["transcript_status"] = "error"
+            transcription_statuses[session_id] = "error"
+        else:
+            result["transcript"] = text
+            result["transcript_status"] = "ready"
+            if text:
+                current_text = transcriptions.get(session_id, "")
+                transcriptions[session_id] = " ".join(
+                    part for part in (current_text, text) if part
+                )
+                latency = elapsed_seconds(audio_started_at)
+                print(f"Transcript: {text}", flush=True)
+                print(f"Transcription latency: {latency:.2f} seconds", flush=True)
+
+        if emotion is None:
+            result["emotion_status"] = "error"
+        else:
+            result["emotion"] = {
+                "label": emotion.label,
+                "confidence": emotion.confidence,
+            }
+            result["emotion_status"] = "ready"
+            logger.info(
+                "Wav2Vec2 emotion: %s (confidence %.2f)",
+                emotion.label,
+                emotion.confidence,
             )
-            latency = elapsed_seconds(audio_started_at)
-            print(f"Transcript: {text}", flush=True)
-            print(f"Transcription latency: {latency:.2f} seconds", flush=True)
-    except Exception:
-        logger.exception("Faster-Whisper transcription failed")
-        transcription_statuses[session_id] = "error"
     finally:
         remaining = pending_transcriptions.get(session_id, 1) - 1
         if remaining > 0:
             pending_transcriptions[session_id] = remaining
-            transcription_statuses[session_id] = "processing"
+            transcription_statuses[session_id] = (
+                "error"
+                if any(
+                    item["transcript_status"] == "error"
+                    for item in segment_results.get(session_id, [])
+                )
+                else "processing"
+            )
         else:
             pending_transcriptions.pop(session_id, None)
             if transcription_statuses.get(session_id) != "error":
@@ -72,9 +118,23 @@ def _queue_transcription(session_id, audio_samples, audio_started_at):
     pending_transcriptions[session_id] = (
         pending_transcriptions.get(session_id, 0) + 1
     )
+    result_index = len(segment_results[session_id])
+    segment_results[session_id].append(
+        {
+            "transcript": "",
+            "transcript_status": "processing",
+            "emotion": None,
+            "emotion_status": "processing",
+        }
+    )
     transcription_statuses[session_id] = "processing"
     task = asyncio.create_task(
-        _transcribe_buffer(session_id, audio_samples, audio_started_at)
+        _analyze_segment(
+            session_id,
+            result_index,
+            audio_samples,
+            audio_started_at,
+        )
     )
     audio_tasks.add(task)
     task.add_done_callback(audio_tasks.discard)
@@ -162,6 +222,7 @@ async def create_answer(sdp, offer_type):
     session_id = str(uuid.uuid4())
     peer_connections.add(peer_connection)
     transcriptions[session_id] = ""
+    segment_results[session_id] = []
     capture_statuses[session_id] = "listening"
     transcription_statuses[session_id] = "listening"
 
@@ -192,6 +253,7 @@ async def create_answer(sdp, offer_type):
     except Exception:
         peer_connections.discard(peer_connection)
         transcriptions.pop(session_id, None)
+        segment_results.pop(session_id, None)
         transcription_statuses.pop(session_id, None)
         capture_statuses.pop(session_id, None)
         pending_transcriptions.pop(session_id, None)
@@ -211,6 +273,7 @@ def get_transcription(session_id):
     return {
         "transcript": transcriptions[session_id],
         "status": transcription_statuses.get(session_id, "listening"),
+        "segments": [dict(item) for item in segment_results[session_id]],
     }
 
 
@@ -226,6 +289,7 @@ async def close_peer_connections():
         await asyncio.gather(*list(audio_tasks), return_exceptions=True)
 
     transcriptions.clear()
+    segment_results.clear()
     transcription_statuses.clear()
     capture_statuses.clear()
     pending_transcriptions.clear()

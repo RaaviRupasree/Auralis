@@ -43,6 +43,7 @@ function App() {
   const [error, setError] = useState('')
   const [sessionId, setSessionId] = useState(null)
   const [transcript, setTranscript] = useState('Waiting for speech...')
+  const [segments, setSegments] = useState([])
   const [sttStatus, setSttStatus] = useState('ready')
 
   useEffect(() => {
@@ -60,19 +61,26 @@ function App() {
           if (isActive) {
             setSessionId(null)
             setSttStatus('ready')
+            setSegments([])
           }
           return
         }
         if (!response.ok) return
 
         const result = await response.json()
+        const speechSegments = Array.isArray(result.segments) ? result.segments : []
         if (isActive) {
           setSttStatus(result.status === 'processing' ? 'processing' : result.status)
           if (result.status === 'error') {
             setError('Speech recognition failed. Check the backend terminal.')
-          } else if (result.status === 'ready') {
+          } else if (speechSegments.some((segment) => segment.transcript_status === 'error')) {
+            setError('Speech recognition failed. Check the backend terminal.')
+          } else if (speechSegments.some((segment) => segment.emotion_status === 'error')) {
+            setError('Emotion detection failed. Check the backend terminal.')
+          } else {
             setError('')
           }
+          setSegments(speechSegments)
         }
         if (isActive && result.transcript) {
           setTranscript(result.transcript)
@@ -97,6 +105,7 @@ function App() {
     setConnectionState('disconnected')
     setSessionId(null)
     setTranscript('Waiting for speech...')
+    setSegments([])
     setSttStatus('ready')
     setError('')
   }
@@ -115,6 +124,7 @@ function App() {
     setConnectionState('connecting')
     setSttStatus('ready')
     setTranscript('Waiting for speech...')
+    setSegments([])
     setError('')
 
     try {
@@ -265,6 +275,45 @@ function App() {
         <section className="transcript-panel" aria-live="polite">
           <h2>Transcript</h2>
           <p>{transcript}</p>
+        </section>
+
+        <section className="emotion-panel" aria-live="polite">
+          <h2>Emotion by speech segment</h2>
+          {segments.length === 0 ? (
+            <p className="empty-emotion">Emotion results will appear after speech is detected.</p>
+          ) : (
+            <ol className="emotion-results">
+              {segments.map((segment, index) => (
+                <li className="emotion-result" key={index}>
+                  <p>
+                    {segment.transcript ||
+                      (segment.transcript_status === 'error'
+                        ? 'Transcription unavailable.'
+                        : 'Transcribing speech...')}
+                  </p>
+                  <div className="emotion-result-details">
+                    <span>
+                      Emotion:{' '}
+                      <strong>
+                        {segment.emotion?.label ||
+                          (segment.emotion_status === 'error'
+                            ? 'Unavailable'
+                            : 'Analyzing...')}
+                      </strong>
+                    </span>
+                    <span>
+                      Confidence:{' '}
+                      <strong>
+                        {typeof segment.emotion?.confidence === 'number'
+                          ? segment.emotion.confidence.toFixed(2)
+                          : '—'}
+                      </strong>
+                    </span>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          )}
         </section>
 
         {error && <p className="connection-error" role="alert">{error}</p>}
