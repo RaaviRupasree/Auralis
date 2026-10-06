@@ -286,6 +286,7 @@ function App() {
               {segments.map((segment, index) => (
                 <li className="emotion-result" key={index}>
                   <p>
+                    <strong>You: </strong>
                     {segment.transcript ||
                       (segment.transcript_status === 'error'
                         ? 'Transcription unavailable.'
@@ -305,10 +306,20 @@ function App() {
                       Confidence:{' '}
                       <strong>
                         {typeof segment.emotion?.confidence === 'number'
-                          ? segment.emotion.confidence.toFixed(2)
+                          ? `${Math.round(segment.emotion.confidence * 100)}%`
                           : '—'}
                       </strong>
                     </span>
+                  </div>
+                  <div className="auralis-response">
+                    <strong>Auralis: </strong>
+                    {segment.response_status === 'ready'
+                      ? segment.response
+                      : segment.response_status === 'error'
+                        ? segment.response_error
+                        : segment.response_status === 'skipped'
+                          ? 'No response generated for an empty transcript.'
+                          : 'Generating response...'}
                   </div>
                 </li>
               ))}

@@ -26,6 +26,7 @@ has detected speech, or is processing a transcript.
 - aiortc
 - Faster-Whisper
 - Transformers and PyTorch for Wav2Vec2 emotion classification
+- Ollama for local Llama inference
 
 ## Backend
 
@@ -70,9 +71,56 @@ downloaded to the local Hugging Face cache on the first completed speech
 segment. Set `EMOTION_MODEL` to use a different compatible audio-classification
 checkpoint.
 
+## Week 2 – LLM Context Engine
+
+After VAD completes a speech segment, Auralis transcribes it and classifies its
+acoustic emotion. The transcript, emotion label, and confidence are then sent
+to a local Ollama chat server. Empty transcripts are skipped. The LLM is not
+called while speech is still being captured.
+
+The default local model is `llama3.2:1b`, selected as a lightweight Llama model
+for development. Install Ollama for Windows from
+[ollama.com/download/windows](https://ollama.com/download/windows), then open a
+new terminal and verify it:
+
+```powershell
+ollama --version
+ollama pull llama3.2:1b
+ollama list
+```
+
+Ollama normally runs as a local service after installation. If needed, start
+the server with `ollama serve`. Configure the model in the backend environment
+before starting FastAPI:
+
+```powershell
+$env:OLLAMA_MODEL = "llama3.2:1b"
+uvicorn main:app --reload
+```
+
+`OLLAMA_HOST` defaults to `http://localhost:11434`, and
+`OLLAMA_TIMEOUT_SECONDS` defaults to `60`. Set `OLLAMA_MODEL` to the exact tag
+shown by `ollama list` when using another installed Llama-family model. No
+Python Ollama package is required; the backend uses Ollama's local HTTP API.
+
+The model receives a crisis-negotiation training persona and the structured
+transcript, emotion, and confidence context. It is instructed to remain calm,
+acknowledge emotion without treating the acoustic label as certain, avoid
+escalation, keep replies concise, and not claim to be a real emergency service.
+Each completed frontend segment displays the transcript, emotion, confidence,
+and generated text response.
+
+LLM request latency is measured with `time.perf_counter()` and returned with
+each completed segment in `llm_latency_ms`. It is also logged in milliseconds.
+Latency was not measured in this development environment because Ollama is not
+installed here; first-run model loading and local machine performance will
+affect timings. The backend reports an actionable error when Ollama or the
+configured model is unavailable without interrupting WebRTC or discarding the
+transcript and emotion result.
+
 ## Current Audio Pipeline
 
-Browser Microphone → React → WebRTC → aiortc → Silero VAD → Completed Speech Segment → Faster-Whisper + Wav2Vec2 → Transcript + Emotion
+Browser Microphone → React → WebRTC → aiortc → Silero VAD → Completed Speech Segment → Faster-Whisper + Wav2Vec2 → Transcript + Emotion → Ollama + Llama → Response Text
 
 ### Completed
 
@@ -83,6 +131,7 @@ Browser Microphone → React → WebRTC → aiortc → Silero VAD → Completed 
 - Basic latency measurement
 - Silero voice activity detection and speech-end segmentation
 - Wav2Vec2 acoustic emotion predictions for completed speech segments
+- Local Ollama Llama context responses for completed speech segments
 
 ### Next
 

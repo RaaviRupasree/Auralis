@@ -9,6 +9,7 @@ from av import AudioResampler
 import numpy as np
 
 from services.emotion_service import classify_emotion
+from services.llm_service import LLMServiceError, generate_response
 from services.vad_service import (
     SAMPLE_RATE,
     SPEECH_PADDING_SAMPLE_COUNT,
@@ -61,6 +62,7 @@ async def _analyze_segment(
             return None
 
     try:
+        logger.info("Transcribing completed speech segment...")
         text, emotion = await asyncio.gather(transcribe(), detect_emotion())
         result = segment_results[session_id][result_index]
         if text is None:
@@ -75,8 +77,8 @@ async def _analyze_segment(
                     part for part in (current_text, text) if part
                 )
                 latency = elapsed_seconds(audio_started_at)
-                print(f"Transcript: {text}", flush=True)
-                print(f"Transcription latency: {latency:.2f} seconds", flush=True)
+                logger.info("Transcript: %s", text)
+                logger.info("Transcription latency: %.2f seconds", latency)
 
         if emotion is None:
             result["emotion_status"] = "error"
@@ -91,6 +93,30 @@ async def _analyze_segment(
                 emotion.label,
                 emotion.confidence,
             )
+
+        if text is None or not text.strip():
+            result["response_status"] = "skipped"
+        else:
+            result["response_status"] = "processing"
+            try:
+                llm_result = await asyncio.to_thread(
+                    generate_response,
+                    text,
+                    emotion.label if emotion is not None else "unknown",
+                    emotion.confidence if emotion is not None else 0.0,
+                )
+            except LLMServiceError as error:
+                result["response_status"] = "error"
+                result["response_error"] = str(error)
+                logger.error("LLM context response failed: %s", error)
+            except Exception:
+                result["response_status"] = "error"
+                result["response_error"] = "Could not generate an LLM response."
+                logger.exception("Unexpected LLM context response failure")
+            else:
+                result["response"] = llm_result.text
+                result["llm_latency_ms"] = llm_result.latency_ms
+                result["response_status"] = "ready"
     finally:
         remaining = pending_transcriptions.get(session_id, 1) - 1
         if remaining > 0:
@@ -125,6 +151,10 @@ def _queue_transcription(session_id, audio_samples, audio_started_at):
             "transcript_status": "processing",
             "emotion": None,
             "emotion_status": "processing",
+            "response": "",
+            "response_status": "processing",
+            "response_error": None,
+            "llm_latency_ms": None,
         }
     )
     transcription_statuses[session_id] = "processing"
@@ -180,6 +210,7 @@ async def _receive_audio(track, session_id):
 
                     if vad_frame.speech_ended:
                         segment = np.concatenate(audio_buffer)
+                        logger.info("Speech ended; processing completed segment")
                         trailing_silence = max(
                             0,
                             vad_frame.silence_sample_count
