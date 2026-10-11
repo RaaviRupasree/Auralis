@@ -1,6 +1,7 @@
 # Environments
 .env
-.env.local
+.env.*
+!.env.example
 .venv/
 venv/
 env/
@@ -19,7 +20,9 @@ htmlcov/
 
 # Node
 node_modules/
+frontend/node_modules/
 dist/
+frontend/dist/
 dist-ssr/
 *.local
 npm-debug.log*
@@ -35,6 +38,9 @@ cached_models/
 *.webm
 *.bin
 *.onnx
+*.pt
+*.pth
+*.safetensors
 
 # IDE & OS
 .vscode/
