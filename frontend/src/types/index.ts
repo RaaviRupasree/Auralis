@@ -12,10 +12,9 @@ export type SessionState =
 
 export type EmotionType =
   | 'calm'
-  | 'anxious'
-  | 'agitated'
-  | 'distressed'
-  | 'angry'
+  | 'anger'
+  | 'fear_panic'
+  | 'sadness'
   | 'neutral';
 
 export interface LatencyBreakdown {

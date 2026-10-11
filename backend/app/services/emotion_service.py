@@ -6,13 +6,15 @@ from app.core.config import settings
 
 logger = logging.getLogger("auralis.emotion")
 
-EMOTION_CATEGORIES = ["calm", "anxious", "agitated", "distressed", "angry", "neutral"]
+# Supported practical emotion categories for crisis negotiation simulation
+EMOTION_CATEGORIES = ["calm", "anger", "fear_panic", "sadness", "neutral"]
 
 class EmotionService:
     """
     Acoustic Speech Emotion Recognition (SER) Engine.
-    Directly analyzes raw audio waveforms using acoustic prosody, fundamental frequency (F0)
-    estimates, spectral centroid, spectral flux, energy dynamics, and zero-crossing rates.
+    Analyzes raw audio waveforms directly using acoustic prosody, fundamental frequency (F0),
+    pitch variability/jitter, spectral centroid, zero-crossing rate (ZCR), and RMS dynamics.
+    Predictions are explicitly treated as paralinguistic estimates.
     """
     def __init__(self):
         self._is_loaded = True
@@ -20,7 +22,14 @@ class EmotionService:
     def extract_acoustic_features(self, audio: np.ndarray, sr: int = 16000) -> Dict[str, float]:
         """Extract acoustic prosodic and spectral features directly from audio waveform."""
         if len(audio) == 0:
-            return {"rms": 0.0, "zcr": 0.0, "spectral_centroid": 0.0, "f0_mean": 0.0, "f0_std": 0.0, "energy_var": 0.0}
+            return {
+                "rms": 0.0,
+                "zcr": 0.0,
+                "spectral_centroid": 0.0,
+                "f0_mean": 0.0,
+                "f0_std": 0.0,
+                "energy_var": 0.0
+            }
 
         # 1. RMS Energy and Variance
         frame_len = int(sr * 0.03)  # 30ms frames
@@ -39,7 +48,7 @@ class EmotionService:
         signs[signs == 0] = 1
         zcr = float(np.mean(np.abs(signs[1:] - signs[:-1])) / 2.0)
         
-        # 3. Spectral Centroid via FFT
+        # 3. Spectral Centroid via FFT (brightness / vocal tension)
         fft_vals = np.abs(np.fft.rfft(audio[:min(len(audio), sr * 3)]))
         freqs = np.fft.rfftfreq(min(len(audio), sr * 3), 1.0 / sr)
         sum_fft = np.sum(fft_vals)
@@ -53,13 +62,11 @@ class EmotionService:
         for frame in frames[::2]:  # Subsample for low latency
             if np.max(np.abs(frame)) < 0.01:
                 continue
-            # Autocorrelation
             corr = np.correlate(frame, frame, mode='full')
             corr = corr[len(corr)//2:]
             
-            # Search lag between 70Hz (sr/70) and 400Hz (sr/400)
-            min_lag = int(sr / 400)
-            max_lag = int(sr / 70)
+            min_lag = int(sr / 400)  # 400Hz ceiling
+            max_lag = int(sr / 70)   # 70Hz floor
             if max_lag < len(corr):
                 lag_window = corr[min_lag:max_lag]
                 if len(lag_window) > 0 and np.max(lag_window) > 0:
@@ -87,6 +94,7 @@ class EmotionService:
         """
         Predict estimated acoustic emotion from 16kHz audio waveform.
         Returns: (emotion_label, confidence_score, duration_ms)
+        Supported labels: calm, anger, fear_panic, sadness, neutral
         """
         start_time = time.perf_counter()
         
@@ -95,65 +103,77 @@ class EmotionService:
             return "neutral", 0.50, duration_ms
 
         feats = self.extract_acoustic_features(audio, sr)
-        
-        # Scoring logic based on acoustic prosody signatures:
-        # High F0 mean & high energy & high centroid => Angry or Agitated
-        # High F0 std (pitch jitter/strain) & moderate energy => Anxious or Distressed
-        # Moderate F0 & low energy & low variance => Calm or Neutral
-        scores: Dict[str, float] = {
-            "calm": 0.2,
-            "neutral": 0.2,
-            "anxious": 0.15,
-            "agitated": 0.15,
-            "distressed": 0.15,
-            "angry": 0.15
-        }
-        
         rms = feats["rms"]
         f0_mean = feats["f0_mean"]
         f0_std = feats["f0_std"]
         centroid = feats["spectral_centroid"]
         
-        # High intensity / anger features
-        if rms > 0.08 and f0_mean > 200:
-            scores["angry"] += 0.45
-            scores["agitated"] += 0.35
-        elif rms > 0.05 and f0_mean > 180:
-            scores["agitated"] += 0.40
-            scores["anxious"] += 0.25
-            
-        # Anxiety / distress (vocal tremor, high pitch jitter)
-        if f0_std > 35.0:
-            scores["anxious"] += 0.35
-            scores["distressed"] += 0.30
-            
-        if centroid > 2200.0 and rms > 0.03:
-            scores["anxious"] += 0.20
-            scores["agitated"] += 0.20
-            
-        # Calm / neutral features (subdued energy, steady pitch)
-        if rms < 0.035 and f0_std < 22.0:
-            scores["calm"] += 0.40
+        scores: Dict[str, float] = {
+            "calm": 0.20,
+            "anger": 0.20,
+            "fear_panic": 0.20,
+            "sadness": 0.20,
+            "neutral": 0.20
+        }
+
+        # 1. Anger: High RMS energy, elevated F0 mean, sharp onset dynamics, high spectral centroid
+        if rms > 0.065:
+            scores["anger"] += 0.45
+            if f0_mean > 185.0:
+                scores["anger"] += 0.35
+            if centroid > 1800.0:
+                scores["anger"] += 0.20
+
+        # 2. Fear/Panic: Elevated F0 mean, extreme pitch jitter/tremor (high f0_std), high centroid
+        if f0_std > 30.0:
+            scores["fear_panic"] += 0.45
+            if f0_mean > 190.0:
+                scores["fear_panic"] += 0.35
+            if centroid > 2100.0:
+                scores["fear_panic"] += 0.25
+
+        # 3. Sadness / Subdued: Low energy, depressed F0 mean, flat pitch trajectory (low f0_std), low centroid
+        if rms < 0.028 and f0_mean < 130.0:
+            scores["sadness"] += 0.50
+            if f0_std < 15.0:
+                scores["sadness"] += 0.30
+            if centroid < 1400.0:
+                scores["sadness"] += 0.20
+
+        # 4. Calm: Subdued energy, steady baseline pitch, controlled modulation
+        if 100.0 <= f0_mean <= 165.0 and f0_std < 22.0 and rms < 0.045:
+            scores["calm"] += 0.45
+            scores["neutral"] += 0.25
+
+        # 5. Baseline / Neutral fallback
+        if 0.025 <= rms <= 0.055 and 110.0 <= f0_mean <= 175.0 and f0_std < 25.0:
             scores["neutral"] += 0.35
-            
-        if 100.0 <= f0_mean <= 170.0 and f0_std < 25.0:
-            scores["neutral"] += 0.30
-            scores["calm"] += 0.25
-            
+            scores["calm"] += 0.20
+
         # Softmax normalization
         exp_scores = {k: np.exp(v) for k, v in scores.items()}
         sum_exp = sum(exp_scores.values())
         probs = {k: float(v / sum_exp) for k, v in exp_scores.items()}
         
-        top_emotion = max(probs, key=probs.get)
-        confidence = float(probs[top_emotion])
-        
-        # Bound confidence realistically (0.45 - 0.94)
-        bounded_conf = float(np.clip(confidence, 0.45, 0.92))
-        
+        # Sort predictions
+        sorted_probs = sorted(probs.items(), key=lambda x: x[1], reverse=True)
+        top_emotion, top_prob = sorted_probs[0]
+        second_prob = sorted_probs[1][1]
+
+        # Uncertainty handling: If close tie (< 0.035 diff) or very low top probability, treat as neutral
+        if (top_prob - second_prob < 0.035) or (top_prob < 0.26):
+            final_emotion = "neutral"
+            bounded_conf = 0.50
+        else:
+            final_emotion = top_emotion
+            bounded_conf = float(np.clip(top_prob, 0.42, 0.92))
+
         duration_ms = (time.perf_counter() - start_time) * 1000.0
-        logger.info("SER estimated emotion: %s (confidence: %.2f, time: %.1f ms)", top_emotion, bounded_conf, duration_ms)
-        return top_emotion, bounded_conf, duration_ms
+        logger.info(
+            "SER estimated emotion: %s (confidence: %.2f, time: %.1f ms)",
+            final_emotion, bounded_conf, duration_ms
+        )
+        return final_emotion, bounded_conf, duration_ms
 
     @property
     def is_ready(self) -> bool:

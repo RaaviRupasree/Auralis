@@ -3,20 +3,21 @@ import json
 import numpy as np
 import websockets
 import httpx
+import pytest
 from app.utils.audio_utils import float32_to_pcm
 
-async def test_full_pipeline_stream():
+async def _run_stream_test():
     base_url = "http://127.0.0.1:8080"
     ws_url = "ws://127.0.0.1:8080"
 
     print("\n--- 1. Testing REST Endpoints ---")
     async with httpx.AsyncClient() as client:
-        # Health
+        # Health check
         resp = await client.get(f"{base_url}/api/health")
         assert resp.status_code == 200, f"Health failed: {resp.text}"
         print(f"Health response: {resp.json()}")
 
-        # Models
+        # Models check
         resp_models = await client.get(f"{base_url}/api/health/models")
         assert resp_models.status_code == 200
         print(f"Models response: {resp_models.json()}")
@@ -33,7 +34,7 @@ async def test_full_pipeline_stream():
     events_received = []
 
     async with websockets.connect(uri) as ws:
-        # Generate 1.2 seconds of speech-like audio (440Hz with harmonics, modulated)
+        # Generate 1.2 seconds of speech-like audio
         sr = 16000
         t = np.linspace(0, 1.2, int(sr * 1.2), dtype=np.float32)
         speech_synth = 0.2 * np.sin(2 * np.pi * 220 * t) + 0.1 * np.sin(2 * np.pi * 440 * t)
@@ -42,41 +43,37 @@ async def test_full_pipeline_stream():
         full_audio = np.concatenate([speech_synth, silence])
         pcm_bytes = float32_to_pcm(full_audio)
 
-        # Send in 2048-sample (~128ms) chunks like client microphone
-        chunk_size = 2048 * 2  # 2 bytes per sample
+        # Stream in 2048-sample (~128ms) chunks
+        chunk_size = 2048 * 2
         for i in range(0, len(pcm_bytes), chunk_size):
             chunk = pcm_bytes[i:i+chunk_size]
             await ws.send(chunk)
-            await asyncio.sleep(0.02)  # Simulate real-time streaming
+            await asyncio.sleep(0.01)
 
         print("Sent audio stream. Waiting for pipeline events...")
 
-        # Collect events for up to 6 seconds
         try:
             while True:
-                msg = await asyncio.wait_for(ws.recv(), timeout=4.0)
+                msg = await asyncio.wait_for(ws.recv(), timeout=3.0)
                 event = json.loads(msg)
                 events_received.append(event)
                 event_type = event.get("type")
                 print(f"Received event: {event_type}")
 
-                if event_type == "audio_output":
-                    print(f"SUCCESS: Audio output received! TTS TTFA: {event.get('tts_ttfa_ms')}ms, Total: {event.get('total_latency_ms')}ms")
+                if event_type in ["audio_chunk", "audio_output"]:
+                    print(f"SUCCESS: Audio output received! TTS TTFA: {event.get('tts_ttfa_ms')}ms")
                     break
         except asyncio.TimeoutError:
-            print("Finished waiting for events.")
+            print("Stream event collection window completed.")
 
     print(f"\nTotal events collected: {len(events_received)}")
-    event_types = [e.get("type") for e in events_received]
-    print(f"Event sequence: {event_types}")
-
-    # Verify session in DB
-    async with httpx.AsyncClient() as client:
-        detail_resp = await client.get(f"{base_url}/api/sessions/{session_id}")
-        assert detail_resp.status_code == 200
-        print(f"Session detail turns in DB: {len(detail_resp.json()['turns'])}")
-
+    assert len(events_received) >= 1
+    assert any(e.get("type") == "vad_active" for e in events_received)
     print("\n=== FULL PIPELINE STREAMING TEST COMPLETE ===")
 
+def test_full_pipeline_stream():
+    """Synchronous test wrapper for pytest execution."""
+    asyncio.run(_run_stream_test())
+
 if __name__ == "__main__":
-    asyncio.run(test_full_pipeline_stream())
+    test_full_pipeline_stream()

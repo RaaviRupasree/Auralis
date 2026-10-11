@@ -254,15 +254,15 @@ export const LiveSessionPage: React.FC = () => {
 
         {/* Action Controls */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          {sessionState === 'speaking' && (
+          {(sessionState === 'speaking' || sessionState === 'generating' || sessionState === 'processing') && (
             <button
               className="btn btn-secondary"
               onClick={handleInterrupt}
-              title="Barge-in / Interrupt Jordan's active speech"
-              style={{ color: '#fb7185', borderColor: 'rgba(244, 63, 94, 0.3)' }}
+              title="Barge-in / Interrupt Jordan's speech or response generation"
+              style={{ color: '#fb7185', borderColor: 'rgba(244, 63, 94, 0.4)', background: 'rgba(244, 63, 94, 0.1)' }}
             >
               <VolumeX size={16} />
-              <span>Barge-In (Interrupt)</span>
+              <span>Barge-In (Interrupt AI)</span>
             </button>
           )}
 

@@ -33,7 +33,8 @@ export class AudioService {
   private analyserNode: AnalyserNode | null = null;
   private processorNode: ScriptProcessorNode | null = null;
   private socket: WebSocket | null = null;
-  private currentAudioSource: AudioBufferSourceNode | null = null;
+  private activeSources: AudioBufferSourceNode[] = [];
+  private nextPlayTime = 0;
   private callbacks: AudioServiceCallbacks;
   private isInterrupted = false;
 
@@ -48,6 +49,7 @@ export class AudioService {
   public async startSession(sessionId: string): Promise<void> {
     try {
       this.callbacks.onStateChange('connecting');
+      this.isInterrupted = false;
 
       // 1. Initialize Audio Context
       const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
@@ -56,7 +58,7 @@ export class AudioService {
         await this.audioContext.resume();
       }
 
-      // 2. Request microphone permission
+      // 2. Request real microphone permission
       this.mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
@@ -67,7 +69,7 @@ export class AudioService {
         },
       });
 
-      // 3. Setup analyser node for visualization
+      // 3. Setup analyser node for live waveform visualization
       this.analyserNode = this.audioContext.createAnalyser();
       this.analyserNode.fftSize = 512;
       this.analyserNode.smoothingTimeConstant = 0.8;
@@ -96,14 +98,14 @@ export class AudioService {
       };
 
       this.socket.onerror = () => {
-        this.callbacks.onError('WebSocket connection error. Check backend status.');
+        this.callbacks.onError('WebSocket connection error. Check backend server on port 8080.');
       };
 
       this.socket.onclose = () => {
         this.callbacks.onStateChange('disconnected');
       };
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Microphone or connection failed';
+      const msg = err instanceof Error ? err.message : 'Microphone permission or connection failed';
       this.callbacks.onError(msg);
       this.callbacks.onStateChange('error');
       throw err;
@@ -131,8 +133,12 @@ export class AudioService {
       this.socket.send(pcm16.buffer);
     };
 
+    // Route mic into processor and mute before destination to prevent speaker feedback loop
+    const muteGain = this.audioContext.createGain();
+    muteGain.gain.value = 0;
     source.connect(this.processorNode);
-    this.processorNode.connect(this.audioContext.destination);
+    this.processorNode.connect(muteGain);
+    muteGain.connect(this.audioContext.destination);
   }
 
   private async handleServerEvent(event: {
@@ -151,6 +157,7 @@ export class AudioService {
     tts_total_ms?: number;
     total_latency_ms?: number;
     turn_index?: number;
+    is_first?: boolean;
     is_speaking?: boolean;
     db?: number;
   }) {
@@ -183,9 +190,26 @@ export class AudioService {
         });
         break;
 
+      case 'audio_chunk':
+        if (event.audio_base64 && !this.isInterrupted) {
+          if (event.is_first) {
+            this.stopActivePlayback();
+          }
+          await this.playAudioBase64(event.audio_base64, false);
+        }
+        if (event.is_first && event.tts_ttfa_ms) {
+          this.callbacks.onAudioOutput({
+            turnIndex: event.turn_index ?? 1,
+            ttsTtfaMs: event.tts_ttfa_ms,
+            ttsTotalMs: event.total_latency_ms ?? 0,
+            totalLatencyMs: event.total_latency_ms ?? 0,
+          });
+        }
+        break;
+
       case 'audio_output':
-        if (event.audio_base64) {
-          await this.playAudioBase64(event.audio_base64);
+        if (event.audio_base64 && this.activeSources.length === 0 && !this.isInterrupted) {
+          await this.playAudioBase64(event.audio_base64, true);
         }
         this.callbacks.onAudioOutput({
           turnIndex: event.turn_index ?? 1,
@@ -196,17 +220,18 @@ export class AudioService {
         break;
 
       case 'interrupted':
+        this.isInterrupted = true;
         this.stopActivePlayback();
         this.callbacks.onInterrupted();
         break;
 
       case 'error':
-        this.callbacks.onError('An error occurred during audio processing.');
+        this.callbacks.onError('An error occurred during audio pipeline processing.');
         break;
     }
   }
 
-  private async playAudioBase64(base64: string): Promise<void> {
+  private async playAudioBase64(base64: string, stopExisting = false): Promise<void> {
     if (!this.audioContext || this.isInterrupted) return;
 
     try {
@@ -218,26 +243,35 @@ export class AudioService {
       }
 
       const audioBuffer = await this.audioContext.decodeAudioData(bytes.buffer.slice(0));
-      this.stopActivePlayback();
+      
+      if (stopExisting) {
+        this.stopActivePlayback();
+      }
 
       const source = this.audioContext.createBufferSource();
       source.buffer = audioBuffer;
       source.connect(this.audioContext.destination);
 
+      const currentTime = this.audioContext.currentTime;
+      const startTime = Math.max(currentTime, this.nextPlayTime);
+      source.start(startTime);
+      this.nextPlayTime = startTime + audioBuffer.duration;
+
+      this.activeSources.push(source);
+
       source.onended = () => {
-        if (this.currentAudioSource === source) {
-          this.currentAudioSource = null;
+        const idx = this.activeSources.indexOf(source);
+        if (idx !== -1) {
+          this.activeSources.splice(idx, 1);
         }
       };
-
-      this.currentAudioSource = source;
-      source.start(0);
-    } catch (e) {
-      console.error('Audio playback error', e);
+    } catch {
+      // Chunk decode boundary handling
     }
   }
 
   public interrupt(): void {
+    this.isInterrupted = true;
     this.stopActivePlayback();
     if (this.socket && this.socket.readyState === WebSocket.OPEN) {
       this.socket.send(JSON.stringify({ type: 'interrupt' }));
@@ -246,18 +280,24 @@ export class AudioService {
   }
 
   public stopActivePlayback(): void {
-    if (this.currentAudioSource) {
+    for (const source of this.activeSources) {
       try {
-        this.currentAudioSource.stop();
-        this.currentAudioSource.disconnect();
+        source.stop();
+        source.disconnect();
       } catch {
-        // ignore if already stopped
+        // ignore already stopped sources
       }
-      this.currentAudioSource = null;
+    }
+    this.activeSources = [];
+    if (this.audioContext) {
+      this.nextPlayTime = this.audioContext.currentTime;
+    } else {
+      this.nextPlayTime = 0;
     }
   }
 
   public stopSession(): void {
+    this.isInterrupted = true;
     this.stopActivePlayback();
 
     if (this.processorNode) {

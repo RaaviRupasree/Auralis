@@ -2,6 +2,7 @@ import time
 import asyncio
 import uuid
 import logging
+import base64
 from typing import Optional, Dict, Any, Callable, List
 import numpy as np
 
@@ -72,7 +73,7 @@ class PipelineSession:
 
         # 3. If utterance completed, trigger end-of-utterance processing
         if utterance_completed and full_utterance is not None:
-            if len(full_utterance) >= 16000 * 0.3:  # At least 300ms
+            if len(full_utterance) >= 16000 * 0.25:  # At least 250ms
                 self.current_task = asyncio.create_task(self.process_utterance(full_utterance))
 
     async def interrupt_ai(self):
@@ -148,26 +149,52 @@ class PipelineSession:
                 "llm_total_ms": llm_total_ms
             })
 
-            # STAGE C: Neural TTS Synthesis and Audio Streaming
+            # STAGE C: Neural TTS Synthesis and Chunked Audio Streaming
             self.state = "speaking"
             self.is_ai_speaking = True
             await self.emit_event("state_change", {"state": "speaking"})
 
-            audio_bytes, tts_ttfa_ms, tts_total_ms = await tts_service.synthesize_full(ai_text, emotion)
+            audio_chunks = []
+            tts_ttfa_ms = 0.0
+            total_eou_to_audio_ms = 0.0
+            chunk_count = 0
 
-            # End of utterance to first audio latency
-            total_eou_to_audio_ms = (time.perf_counter() - eou_timestamp) * 1000.0
+            async for chunk_bytes, is_first, chunk_ttfa in tts_service.synthesize_stream(ai_text, emotion):
+                if self.is_interrupted:
+                    logger.info("Interruption flag detected during TTS synthesis for turn %d", self.turn_index)
+                    break
 
-            # Emit synthesized audio payload
-            import base64
-            audio_b64 = base64.b64encode(audio_bytes).decode('utf-8')
-            
+                if is_first:
+                    tts_ttfa_ms = chunk_ttfa
+                    total_eou_to_audio_ms = (time.perf_counter() - eou_timestamp) * 1000.0
+
+                audio_chunks.append(chunk_bytes)
+                chunk_count += 1
+                chunk_b64 = base64.b64encode(chunk_bytes).decode('utf-8')
+
+                # Emit incremental streaming chunk
+                await self.emit_event("audio_chunk", {
+                    "turn_index": self.turn_index,
+                    "chunk_index": chunk_count,
+                    "audio_base64": chunk_b64,
+                    "is_first": is_first,
+                    "tts_ttfa_ms": tts_ttfa_ms,
+                    "total_latency_ms": (time.perf_counter() - eou_timestamp) * 1000.0
+                })
+
+            full_audio = b"".join(audio_chunks)
+            total_tts_ms = (time.perf_counter() - eou_timestamp) * 1000.0 - (stt_ms + ser_ms + llm_total_ms)
+            if total_tts_ms < 0:
+                total_tts_ms = tts_ttfa_ms
+
+            # Emit synthesized full audio payload as fallback / completion
+            audio_b64 = base64.b64encode(full_audio).decode('utf-8')
             await self.emit_event("audio_output", {
                 "turn_index": self.turn_index,
                 "audio_base64": audio_b64,
                 "audio_mime": "audio/mp3",
                 "tts_ttfa_ms": tts_ttfa_ms,
-                "tts_total_ms": tts_total_ms,
+                "tts_total_ms": total_tts_ms,
                 "total_latency_ms": total_eou_to_audio_ms
             })
 
@@ -188,7 +215,7 @@ class PipelineSession:
                 llm_ttft_ms=llm_ttft_ms,
                 llm_total_ms=llm_total_ms,
                 tts_ttfa_ms=tts_ttfa_ms,
-                tts_total_ms=tts_total_ms,
+                tts_total_ms=total_tts_ms,
                 total_latency_ms=total_eou_to_audio_ms,
                 was_interrupted=self.is_interrupted
             )

@@ -1,6 +1,6 @@
 import React from 'react';
 import { EmotionType } from '../types';
-import { ShieldCheck, AlertTriangle, Flame, Activity, HelpCircle, Smile } from 'lucide-react';
+import { ShieldCheck, AlertTriangle, Flame, HeartCrack, Smile } from 'lucide-react';
 
 interface EmotionBadgeProps {
   emotion?: EmotionType;
@@ -24,41 +24,32 @@ export const EmotionBadge: React.FC<EmotionBadgeProps> = ({
           icon: ShieldCheck,
           desc: 'Low jitter, steady pitch baseline, controlled vocal dynamics.',
         };
-      case 'anxious':
+      case 'anger':
         return {
-          label: 'Anxious / Apprehensive',
-          color: '#f59e0b',
-          bg: 'rgba(245, 158, 11, 0.12)',
-          border: 'rgba(245, 158, 11, 0.3)',
-          icon: AlertTriangle,
-          desc: 'Elevated spectral centroid, pitch tremors, unstable breath.',
-        };
-      case 'agitated':
-        return {
-          label: 'Agitated / Defensive',
-          color: '#f97316',
-          bg: 'rgba(249, 115, 22, 0.12)',
-          border: 'rgba(249, 115, 22, 0.3)',
-          icon: Activity,
-          desc: 'Rapid tempo, elevated F0, sharp energy bursts.',
-        };
-      case 'distressed':
-        return {
-          label: 'Distressed / Crisis Strain',
-          color: '#ec4899',
-          bg: 'rgba(236, 72, 153, 0.12)',
-          border: 'rgba(236, 72, 153, 0.3)',
-          icon: HelpCircle,
-          desc: 'Severe pitch instability, irregular pauses, high vocal strain.',
-        };
-      case 'angry':
-        return {
-          label: 'Angry / Hostile',
+          label: 'Anger / Agitated',
           color: '#f43f5e',
           bg: 'rgba(244, 63, 94, 0.12)',
           border: 'rgba(244, 63, 94, 0.3)',
           icon: Flame,
           desc: 'High RMS energy, abrupt onsets, elevated fundamental frequency.',
+        };
+      case 'fear_panic':
+        return {
+          label: 'Fear / Panic',
+          color: '#f59e0b',
+          bg: 'rgba(245, 158, 11, 0.12)',
+          border: 'rgba(245, 158, 11, 0.3)',
+          icon: AlertTriangle,
+          desc: 'Elevated pitch, rapid jitter variance, high spectral tension.',
+        };
+      case 'sadness':
+        return {
+          label: 'Sadness / Subdued',
+          color: '#818cf8',
+          bg: 'rgba(129, 140, 248, 0.12)',
+          border: 'rgba(129, 140, 248, 0.3)',
+          icon: HeartCrack,
+          desc: 'Depressed F0 mean, low acoustic energy, flat pitch trajectory.',
         };
       case 'neutral':
       default:
