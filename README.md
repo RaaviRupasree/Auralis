@@ -107,7 +107,7 @@ Open **`http://127.0.0.1:8080`** in your browser.
 
 ## 6. Testing & Quality Assurance
 
-### Run Unit & Integration Tests (12/12 Passing)
+### Run Unit & Integration Tests (14/14 Passing)
 ```bash
 python -m pytest backend/tests -v
 ```
