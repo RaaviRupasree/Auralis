@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+aiortc
+faster-whisper
+numpy
+torch
+transformers
