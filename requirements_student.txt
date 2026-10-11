@@ -1,0 +1,13 @@
+# Auralis: Real-Time Voice-to-Voice Emotion Engine
+# Student Edition Requirements
+
+streamlit>=1.39.0
+faster-whisper>=1.0.0
+transformers>=4.40.0
+soundfile>=0.12.1
+av>=11.0.0
+pyttsx3>=2.90
+edge-tts>=6.1.10
+requests>=2.31.0
+numpy>=1.24.0
+torch>=2.0.0
