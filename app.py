@@ -2,17 +2,16 @@
 ========================================================================================
 Auralis — Real-Time Voice-to-Voice Emotion Engine (Student Edition)
 ========================================================================================
-A lightweight, beginner-friendly Generative AI application for a Crisis Negotiation
-Training Simulator built with Streamlit, Faster-Whisper, Wav2Vec2 Emotion AI, Ollama,
-and Text-to-Speech.
+A lightweight Generative AI application for a Crisis Negotiation Training Simulator.
+Built with Streamlit, Faster-Whisper, Wav2Vec2 Emotion AI, Ollama (Llama 3.2), and TTS.
 
-Workflow:
-1. Microphone Audio Capture -> Browser audio recording via Streamlit
-2. Speech-to-Text          -> Faster-Whisper (int8 quantized CPU)
-3. Emotion Recognition     -> Pretrained Wav2Vec2 / Acoustic Prosody Model
-4. Conversational AI       -> Local Ollama LLM (e.g., Llama 3.2 / Llama 3)
-5. Text-to-Speech (TTS)    -> Neural Edge-TTS / Offline Windows pyttsx3
-6. Audio Playback          -> Interactive Streamlit audio player with real metrics
+Pipeline:
+1. Microphone Audio Capture -> Browser audio recording via Streamlit st.audio_input
+2. Speech-to-Text          -> Faster-Whisper (tiny.en int8 quantized on CPU)
+3. Emotion Recognition     -> Pretrained Wav2Vec2 (superb/wav2vec2-base-superb-er)
+4. Conversational AI       -> Local Ollama LLM (Llama 3.2 real generation)
+5. Text-to-Speech (TTS)    -> Neural Edge-TTS / Windows Native pyttsx3 (ONLY on success)
+6. Audio Playback          -> Interactive audio player + real latency metrics
 ========================================================================================
 """
 
@@ -42,22 +41,15 @@ st.set_page_config(
 st.markdown("""
 <style>
     .main-header {
-        font-size: 2.2rem;
+        font-size: 2.1rem;
         font-weight: 700;
         color: #1E3A8A;
         margin-bottom: 0.2rem;
     }
     .sub-header {
-        font-size: 1.05rem;
+        font-size: 1.0rem;
         color: #4B5563;
-        margin-bottom: 1.5rem;
-    }
-    .metric-card {
-        background-color: #F8FAFC;
-        border: 1px solid #E2E8F0;
-        border-radius: 10px;
-        padding: 16px;
-        margin-bottom: 12px;
+        margin-bottom: 1.4rem;
     }
     .badge-calm { background-color: #DEF7EC; color: #03543F; padding: 4px 10px; border-radius: 6px; font-weight: 600; }
     .badge-angry { background-color: #FDE8E8; color: #9B1C1C; padding: 4px 10px; border-radius: 6px; font-weight: 600; }
@@ -67,14 +59,17 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Initialize Session State
+if "last_processed" not in st.session_state:
+    st.session_state.last_processed = None
+
 # -----------------------------------------------------------------------------
-# 2. Cached Model Loaders (Loaded once for speed)
+# 2. Cached Model Loaders
 # -----------------------------------------------------------------------------
 @st.cache_resource(show_spinner="Loading Faster-Whisper speech model...")
 def load_whisper():
     """Loads Faster-Whisper tiny.en model for fast CPU transcription."""
     from faster_whisper import WhisperModel
-    # Using tiny.en with int8 quantization for ultra-fast, low-memory CPU execution
     return WhisperModel("tiny.en", device="cpu", compute_type="int8")
 
 @st.cache_resource(show_spinner="Loading pretrained Wav2Vec2 Emotion model...")
@@ -82,7 +77,6 @@ def load_wav2vec2_emotion_pipeline():
     """Loads pretrained Wav2Vec2 speech emotion classification model."""
     try:
         from transformers import pipeline
-        # Pretrained IEMOCAP speech emotion recognition model
         pipe = pipeline("audio-classification", model="superb/wav2vec2-base-superb-er")
         return pipe
     except Exception as e:
@@ -111,7 +105,6 @@ def decode_audio_bytes(audio_bytes: bytes) -> tuple[str, np.ndarray]:
     audio_int16 = np.concatenate(frames, axis=1).squeeze()
     audio_float32 = audio_int16.astype(np.float32) / 32768.0
 
-    # Write clean 16kHz mono WAV file for models
     temp_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
     temp_wav_path = temp_wav.name
     temp_wav.close()
@@ -136,10 +129,9 @@ def predict_emotion_wav2vec2(wav_path: str) -> tuple[str, float, dict]:
     """Predicts emotion using the pretrained Wav2Vec2 model."""
     classifier = load_wav2vec2_emotion_pipeline()
     if classifier is None:
-        return "neutral", 0.5, {"neutral": 0.5}
+        return "Calm / Neutral", 0.5, {"Calm / Neutral": 0.5}
 
     results = classifier(wav_path)
-    # Mapping IEMOCAP labels (neu, hap, ang, sad) to human-readable names
     label_map = {
         "neu": "Calm / Neutral",
         "hap": "Relieved / Positive",
@@ -152,23 +144,18 @@ def predict_emotion_wav2vec2(wav_path: str) -> tuple[str, float, dict]:
         mapped = label_map.get(item["label"], item["label"])
         scores[mapped] = float(item["score"])
 
-    # Highest score
     top_label = label_map.get(results[0]["label"], results[0]["label"])
     top_score = float(results[0]["score"])
     return top_label, top_score, scores
 
 def predict_emotion_acoustic(audio_np: np.ndarray, sr: int = 16000) -> tuple[str, float, dict]:
-    """
-    Lightweight acoustic prosodic emotion analyzer using pitch, energy, and spectral dynamics.
-    Acts as a 100% offline, zero-dependency alternative.
-    """
+    """Lightweight acoustic prosodic emotion analyzer using pitch & energy."""
     if len(audio_np) == 0:
         return "Calm / Neutral", 0.5, {}
 
     rms = np.sqrt(np.mean(audio_np**2) + 1e-9)
     rms_db = 20 * np.log10(rms + 1e-9)
 
-    # Autocorrelation pitch estimate
     corr = np.correlate(audio_np, audio_np, mode="full")
     corr = corr[len(corr)//2:]
     d = np.diff(corr)
@@ -179,7 +166,6 @@ def predict_emotion_acoustic(audio_np: np.ndarray, sr: int = 16000) -> tuple[str
         if peak > 0:
             pitch = float(sr / peak)
 
-    # Heuristic acoustic classification
     if rms_db > -18.0 and pitch > 210.0:
         label = "Agitated / Angry"
         conf = 0.85
@@ -196,30 +182,39 @@ def predict_emotion_acoustic(audio_np: np.ndarray, sr: int = 16000) -> tuple[str
     return label, conf, {"Energy (dB)": round(float(rms_db), 1), "Pitch (Hz)": round(pitch, 1)}
 
 # -----------------------------------------------------------------------------
-# 6. Ollama LLM Connection & Fallback
+# 6. Ollama LLM Connection & Real Generation
 # -----------------------------------------------------------------------------
 def check_ollama_status(host: str = "http://localhost:11434") -> tuple[bool, list[str]]:
-    """Checks if Ollama server is running and lists available models."""
+    """Checks if Ollama server is running and lists installed models."""
     try:
-        res = requests.get(f"{host}/api/tags", timeout=2)
+        res = requests.get(f"{host}/api/tags", timeout=3)
         if res.status_code == 200:
-            models = [m["name"] for m in res.json().get("models", [])]
-            return True, models
+            models = [m.get("name", "") for m in res.json().get("models", [])]
+            return True, [m for m in models if m]
     except Exception:
         pass
     return False, []
 
-def generate_ollama_response(transcript: str, emotion: str, model: str = "llama3.2", host: str = "http://localhost:11434") -> tuple[str, bool]:
-    """Sends prompt with transcript and detected emotion to Ollama."""
+def generate_ollama_response(
+    transcript: str,
+    emotion: str,
+    model: str,
+    host: str = "http://localhost:11434"
+) -> tuple[str, bool, str]:
+    """
+    Sends actual recognized transcript and predicted vocal emotion to Ollama.
+    Returns: (response_text, is_success, error_message)
+    """
     system_prompt = (
         "You are Jordan, an emotionally distressed individual barricaded inside a building in a crisis negotiation training simulator.\n"
-        "A crisis negotiation trainee is speaking with you through a telephone.\n"
-        f'The trainee spoke with a "{emotion}" vocal tone and said: "{transcript}"\n\n'
-        "Guidelines:\n"
+        "A crisis negotiation trainee is speaking with you over a telephone line.\n"
+        f"Trainee's Spoken Words: \"{transcript}\"\n"
+        f"Trainee's Vocal Emotion Detected: \"{emotion}\"\n\n"
+        "Instructions for your response:\n"
         "- Respond in 1 to 2 realistic spoken sentences as Jordan.\n"
         "- If the trainee sounds calm and empathetic, soften your tone slightly and show hesitant openness.\n"
-        "- If the trainee sounds aggressive or dismissive, demand they back off and show rising panic.\n"
-        "- Do not use stage directions or quotation marks. Speak directly to them."
+        "- If the trainee sounds aggressive, impatient, or angry, respond defensively and demand they back off.\n"
+        "- Stay strictly in character. Do not include stage directions, parentheses, quotation marks, or conversational prefixes like 'Jordan:'. Speak directly."
     )
 
     try:
@@ -231,37 +226,45 @@ def generate_ollama_response(transcript: str, emotion: str, model: str = "llama3
                 "stream": False,
                 "options": {
                     "temperature": 0.7,
-                    "num_predict": 60
+                    "num_predict": 75
                 }
             },
-            timeout=15
+            timeout=25
         )
+
         if res.status_code == 200:
-            text = res.json().get("response", "").strip()
-            return text, True
-        return f"Ollama error: HTTP {res.status_code}", False
+            data = res.json()
+            text = data.get("response", "").strip()
+            # Clean any accidental outer quotes
+            if text.startswith('"') and text.endswith('"'):
+                text = text[1:-1].strip()
+            if text:
+                return text, True, ""
+            return "", False, "Ollama returned an empty response string."
+
+        elif res.status_code == 404:
+            err_msg = ""
+            try:
+                err_msg = res.json().get("error", "")
+            except Exception:
+                pass
+            return "", False, f"Model '{model}' not found in Ollama (HTTP 404). {err_msg}"
+
+        else:
+            return "", False, f"Ollama HTTP {res.status_code}: {res.text}"
+
+    except requests.exceptions.ConnectionError:
+        return "", False, f"Cannot connect to Ollama at {host}. Verify that Ollama service is running."
+    except requests.exceptions.Timeout:
+        return "", False, "Ollama request timed out after 25 seconds."
     except Exception as e:
-        # Fallback simulation response if Ollama is not yet started by the student
-        fallback = simulate_negotiation_response(transcript, emotion)
-        return fallback, False
-
-def simulate_negotiation_response(transcript: str, emotion: str) -> str:
-    """Intelligent fallback for students testing before Ollama is installed."""
-    emotion_lower = emotion.lower()
-    if "angry" in emotion_lower or "agitated" in emotion_lower:
-        return "Don't you raise your voice at me! You stay away from that door, or nobody is walking out of here!"
-    elif "distressed" in emotion_lower or "sad" in emotion_lower:
-        return "I... I just didn't want things to end up like this. I don't know who I can even trust anymore."
-    elif "relieved" in emotion_lower or "positive" in emotion_lower:
-        return "You sound serious about helping. If you can guarantee my sister is safe outside, maybe we can talk."
-    else:
-        return "I hear you, but you need to promise me you're not just stalling for time out there."
+        return "", False, f"Ollama error: {str(e)}"
 
 # -----------------------------------------------------------------------------
-# 7. Text-to-Speech (TTS)
+# 7. Text-to-Speech (TTS) — Executed ONLY on successful LLM response
 # -----------------------------------------------------------------------------
-def synthesize_tts(text: str, engine_choice: str = "Edge-TTS (Neural)") -> str:
-    """Converts text into audio file using chosen TTS engine."""
+def synthesize_tts(text: str, engine_choice: str = "Edge-TTS (Neural High-Fidelity)") -> str:
+    """Converts LLM response text into audio file using chosen TTS engine."""
     temp_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3" if "Edge" in engine_choice else ".wav")
     out_path = temp_audio.name
     temp_audio.close()
@@ -278,7 +281,7 @@ def synthesize_tts(text: str, engine_choice: str = "Edge-TTS (Neural)") -> str:
             # Fall back to pyttsx3 if network request fails
             pass
 
-    # Offline Windows pyttsx3 fallback
+    # Windows native pyttsx3 fallback
     import pyttsx3
     engine = pyttsx3.init()
     engine.setProperty("rate", 160)
@@ -297,16 +300,25 @@ with st.sidebar:
     st.header("⚙️ System Status & Settings")
 
     # Check Ollama Server
-    ollama_online, detected_models = check_ollama_status()
+    ollama_online, installed_models = check_ollama_status()
     if ollama_online:
         st.success("🟢 Ollama Connected (Localhost:11434)")
-        if detected_models:
-            selected_model = st.selectbox("Select Ollama Model", detected_models, index=0)
+        if installed_models:
+            # Match installed models cleanly
+            default_idx = 0
+            for idx, m in enumerate(installed_models):
+                if "llama3.2" in m:
+                    default_idx = idx
+                    break
+            selected_model = st.selectbox("Select Ollama Model", installed_models, index=default_idx)
+            st.caption(f"Ready: `{selected_model}`")
         else:
-            selected_model = st.text_input("Model Name", value="llama3.2")
-            st.caption("No models detected. Pull one with: `ollama run llama3.2`")
+            st.warning("⚠️ Ollama is running, but no models are installed yet.")
+            selected_model = st.text_input("Target Model", value="llama3.2")
+            st.code(f"ollama pull {selected_model}", language="powershell")
     else:
-        st.warning("🟠 Ollama Offline (Using Smart Fallback)")
+        st.error("🔴 Ollama Offline (localhost:11434)")
+        st.caption("Start Ollama or run `ollama serve` in PowerShell.")
         selected_model = st.text_input("Target Model", value="llama3.2")
 
     st.divider()
@@ -324,8 +336,6 @@ with st.sidebar:
         ["Edge-TTS (Neural High-Fidelity)", "pyttsx3 (Offline Windows Native)"],
         index=0
     )
-
-
 
 # --- Main Workspace ---
 col_record, col_info = st.columns([1.1, 0.9])
@@ -360,14 +370,11 @@ if use_sample:
     )
 
 # -----------------------------------------------------------------------------
-# 9. Pipeline Execution
+# 9. Pipeline Execution & State Processing
 # -----------------------------------------------------------------------------
 has_input = (audio_data is not None) or (use_sample and st.button("▶️ Process Selected Sample"))
 
 if has_input:
-    st.divider()
-    st.subheader("2. Pipeline Processing & Results")
-
     with st.spinner("Processing speech, emotion, and AI response..."):
         t_start = time.time()
         temp_input_wav = None
@@ -378,7 +385,6 @@ if has_input:
                 audio_bytes = audio_data.read()
                 temp_input_wav, audio_np = decode_audio_bytes(audio_bytes)
             else:
-                # Generate sample audio dynamically for testing
                 import pyttsx3
                 temp_f = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
                 temp_input_wav = temp_f.name
@@ -409,77 +415,57 @@ if has_input:
 
             # --- Step C: LLM Response (Ollama) ---
             t_llm_start = time.time()
-            ai_reply, was_real_ollama = generate_ollama_response(
-                transcript, top_emotion, model=selected_model
+            ai_reply, is_llm_success, llm_error = generate_ollama_response(
+                transcript=transcript,
+                emotion=top_emotion,
+                model=selected_model
             )
             t_llm = time.time() - t_llm_start
 
-            # --- Step D: Text-to-Speech ---
-            t_tts_start = time.time()
-            tts_file_path = synthesize_tts(ai_reply, engine_choice=tts_engine)
-            t_tts = time.time() - t_tts_start
+            # --- Step D: Text-to-Speech (ONLY on successful LLM response) ---
+            tts_file_path = None
+            t_tts = 0.0
+            audio_output_bytes = None
+
+            if is_llm_success and ai_reply:
+                t_tts_start = time.time()
+                tts_file_path = synthesize_tts(ai_reply, engine_choice=tts_engine)
+                t_tts = time.time() - t_tts_start
+
+                with open(tts_file_path, "rb") as f:
+                    audio_output_bytes = f.read()
+
+                # Clean up temporary TTS file
+                try:
+                    os.remove(tts_file_path)
+                except Exception:
+                    pass
 
             t_total = time.time() - t_start
 
-            # --- Results Display ---
-            res_col1, res_col2 = st.columns([1, 1])
-
-            with res_col1:
-                # 1. Recognized Speech
-                st.markdown("#### 📝 1. Recognized Speech (Faster-Whisper)")
-                st.success(f'"{transcript}"')
-                st.caption(f"Detected Language: {lang.upper()} • Whisper Latency: {t_stt:.2f}s")
-
-                # 2. Detected Vocal Emotion
-                st.markdown("#### 🎭 2. Vocal Emotion Recognition")
-                badge_class = "badge-neutral"
-                if "Angry" in top_emotion or "Agitated" in top_emotion:
-                    badge_class = "badge-angry"
-                elif "Sad" in top_emotion or "Distressed" in top_emotion:
-                    badge_class = "badge-sad"
-                elif "Relieved" in top_emotion:
-                    badge_class = "badge-happy"
-                elif "Calm" in top_emotion:
-                    badge_class = "badge-calm"
-
-                st.markdown(
-                    f'Detected Emotion: <span class="{badge_class}">{top_emotion} ({conf*100:.1f}%)</span>',
-                    unsafe_allow_html=True
-                )
-                st.progress(float(conf))
-                st.caption(f"Model: {emotion_engine} • Emotion Latency: {t_emo:.2f}s")
-
-            with res_col2:
-                # 3. AI Response
-                st.markdown("#### 🤖 3. Jordan's AI Response (Ollama)")
-                st.info(f'"{ai_reply}"')
-                if was_real_ollama:
-                    st.caption(f"Generated via Ollama model `{selected_model}` • LLM Latency: {t_llm:.2f}s")
-                else:
-                    st.caption(f"Generated via Smart Crisis Simulator (Ollama offline) • Latency: {t_llm:.2f}s")
-
-                # 4. Spoken Audio Playback
-                st.markdown("#### 🔊 4. Generated Voice Playback")
-                with open(tts_file_path, "rb") as f:
-                    audio_output_bytes = f.read()
-                st.audio(audio_output_bytes, format="audio/mp3" if tts_file_path.endswith(".mp3") else "audio/wav")
-                st.caption(f"Synthesized using {tts_engine} • TTS Latency: {t_tts:.2f}s")
-
-            st.divider()
-
-            # --- Processing Time & Metrics ---
-            st.markdown("#### ⏱️ Actual Measured Processing Latencies")
-            m1, m2, m3, m4, m5 = st.columns(5)
-            m1.metric("Total Latency", f"{t_total:.2f} s")
-            m2.metric("Speech-to-Text", f"{t_stt:.2f} s")
-            m3.metric("Emotion Recognition", f"{t_emo:.2f} s")
-            m4.metric("LLM Response", f"{t_llm:.2f} s")
-            m5.metric("Text-to-Speech", f"{t_tts:.2f} s")
+            # Store in session state for rendering & retry
+            st.session_state.last_processed = {
+                "transcript": transcript,
+                "lang": lang,
+                "t_stt": t_stt,
+                "top_emotion": top_emotion,
+                "conf": conf,
+                "t_emo": t_emo,
+                "emotion_engine": emotion_engine,
+                "ai_reply": ai_reply,
+                "is_llm_success": is_llm_success,
+                "llm_error": llm_error,
+                "selected_model": selected_model,
+                "t_llm": t_llm,
+                "audio_output_bytes": audio_output_bytes,
+                "t_tts": t_tts,
+                "tts_engine": tts_engine,
+                "t_total": t_total
+            }
 
         except Exception as e:
-            st.error(f"❌ An error occurred during processing: {str(e)}")
+            st.error(f"❌ An error occurred during audio processing: {str(e)}")
         finally:
-            # Clean up temporary WAV file
             if temp_input_wav and os.path.exists(temp_input_wav):
                 try:
                     os.remove(temp_input_wav)
@@ -487,7 +473,108 @@ if has_input:
                     pass
 
 # -----------------------------------------------------------------------------
-# 10. Footer
+# 10. Display Results & Retry Section
+# -----------------------------------------------------------------------------
+if st.session_state.last_processed is not None:
+    res = st.session_state.last_processed
+
+    st.divider()
+    st.subheader("2. Pipeline Processing & Results")
+
+    res_col1, res_col2 = st.columns([1, 1])
+
+    with res_col1:
+        # 1. Recognized Speech
+        st.markdown("#### 📝 1. Recognized Speech (Faster-Whisper)")
+        st.success(f'"{res["transcript"]}"')
+        st.caption(f"Detected Language: {res['lang'].upper()} • Whisper Latency: {res['t_stt']:.2f}s")
+
+        # 2. Detected Vocal Emotion
+        st.markdown("#### 🎭 2. Vocal Emotion Recognition")
+        top_emo = res["top_emotion"]
+        badge_class = "badge-neutral"
+        if "Angry" in top_emo or "Agitated" in top_emo:
+            badge_class = "badge-angry"
+        elif "Sad" in top_emo or "Distressed" in top_emo:
+            badge_class = "badge-sad"
+        elif "Relieved" in top_emo:
+            badge_class = "badge-happy"
+        elif "Calm" in top_emo:
+            badge_class = "badge-calm"
+
+        st.markdown(
+            f'Detected Emotion: <span class="{badge_class}">{top_emo} ({res["conf"]*100:.1f}%)</span>',
+            unsafe_allow_html=True
+        )
+        st.progress(float(res["conf"]))
+        st.caption(f"Model: {res['emotion_engine']} • Emotion Latency: {res['t_emo']:.2f}s")
+
+    with res_col2:
+        # 3. AI Response
+        st.markdown("#### 🤖 3. Jordan's AI Response (Ollama)")
+        if res["is_llm_success"]:
+            st.info(f'"{res["ai_reply"]}"')
+            st.caption(f"Generated via Ollama model `{res['selected_model']}` • LLM Latency: {res['t_llm']:.2f}s")
+        else:
+            st.error(f"❌ {res['llm_error']}")
+            st.caption(f"LLM Generation Attempt: {res['t_llm']:.2f}s")
+
+            # Retry Button
+            if st.button("🔄 Retry Ollama LLM Generation"):
+                with st.spinner(f"Retrying generation with model '{selected_model}'..."):
+                    t_retry_start = time.time()
+                    retry_reply, retry_success, retry_err = generate_ollama_response(
+                        transcript=res["transcript"],
+                        emotion=res["top_emotion"],
+                        model=selected_model
+                    )
+                    t_retry_llm = time.time() - t_retry_start
+
+                    retry_audio_bytes = None
+                    t_retry_tts = 0.0
+                    if retry_success and retry_reply:
+                        t_tts_s = time.time()
+                        tts_p = synthesize_tts(retry_reply, engine_choice=tts_engine)
+                        t_retry_tts = time.time() - t_tts_s
+                        with open(tts_p, "rb") as f:
+                            retry_audio_bytes = f.read()
+                        try:
+                            os.remove(tts_p)
+                        except Exception:
+                            pass
+
+                    # Update session state
+                    res["ai_reply"] = retry_reply
+                    res["is_llm_success"] = retry_success
+                    res["llm_error"] = retry_err
+                    res["selected_model"] = selected_model
+                    res["t_llm"] = t_retry_llm
+                    res["audio_output_bytes"] = retry_audio_bytes
+                    res["t_tts"] = t_retry_tts
+                    res["t_total"] = res["t_stt"] + res["t_emo"] + t_retry_llm + t_retry_tts
+                    st.rerun()
+
+        # 4. Spoken Audio Playback (ONLY shown if valid audio exists)
+        st.markdown("#### 🔊 4. Generated Voice Playback")
+        if res["is_llm_success"] and res["audio_output_bytes"] is not None:
+            st.audio(res["audio_output_bytes"], format="audio/mp3" if "Edge" in res["tts_engine"] else "audio/wav")
+            st.caption(f"Synthesized using {res['tts_engine']} • TTS Latency: {res['t_tts']:.2f}s")
+        else:
+            st.warning("⚠️ Audio playback is unavailable because valid LLM response text was not generated.")
+
+    st.divider()
+
+    # --- Processing Time & Metrics ---
+    st.markdown("#### ⏱️ Actual Measured Processing Latencies")
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Total Latency", f"{res['t_total']:.2f} s")
+    m2.metric("Speech-to-Text", f"{res['t_stt']:.2f} s")
+    m3.metric("Emotion Recognition", f"{res['t_emo']:.2f} s")
+    m4.metric("LLM Response", f"{res['t_llm']:.2f} s")
+    m5.metric("Text-to-Speech", f"{res['t_tts']:.2f} s" if res["is_llm_success"] else "N/A")
+
+# -----------------------------------------------------------------------------
+# 11. Footer
 # -----------------------------------------------------------------------------
 st.markdown("---")
 st.markdown(
