@@ -325,24 +325,7 @@ with st.sidebar:
         index=0
     )
 
-    st.divider()
 
-    # Expandable Help Guide for Students
-    with st.expander("📖 How to Setup Ollama"):
-        st.markdown("""
-        **1. Download Ollama:**
-        Go to [ollama.com](https://ollama.com) and install it on Windows.
-        
-        **2. Pull a local model:**
-        Open PowerShell and run:
-        ```bash
-        ollama run llama3.2
-        ```
-        *(Or run `ollama run mistral` or `ollama run phi3`)*
-        
-        **3. Click Rerun:**
-        Ollama will show as 🟢 **Connected** automatically!
-        """)
 
 # --- Main Workspace ---
 col_record, col_info = st.columns([1.1, 0.9])
